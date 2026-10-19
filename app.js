@@ -94,9 +94,43 @@
   });
   function draftsFor(version){const result={};try{const prefix=`iqoko-review-draft:${identity.participant.id}:${version}:`;for(const key of Object.keys(sessionStorage)){if(key.startsWith(prefix))result[key]=sessionStorage.getItem(key);}}catch{storageAvailable=false;}return result;}
   async function getPublicScript(name){try{const response=await fetch(new URL(name,location.href),{cache:'no-cache'});if(!response.ok)throw new Error('Не удалось загрузить интерфейс комментариев.');return await response.text();}catch(error){throw new Error(error.message||'Не удалось загрузить интерфейс комментариев.');}}
-  function parseRoute(route){const hash=route.replace(/^#/,'');if(hash==='report')return{kind:'report'};if(hash.startsWith('print='))return{kind:'print',snapshot:decodeURIComponent(hash.slice(6))};if(hash.startsWith('viewer=')){const params=new URLSearchParams(hash);return{kind:'viewer',file:params.get('viewer'),version:params.get('version')||state?.report?.version};}return{kind:'dashboard',anchor:['snapshots','participants'].includes(hash)?hash:''};}
+  const isImagePath=(path)=>typeof path==='string'&&path.length<1000&&/\.(?:png|jpe?g|webp|gif)$/i.test(path);
+  function parseRoute(route){const hash=route.replace(/^#/,'');if(hash==='report')return{kind:'report'};if(hash.startsWith('print='))return{kind:'print',snapshot:decodeURIComponent(hash.slice(6))};if(hash.startsWith('viewer=')||hash.startsWith('image=')){const params=new URLSearchParams(hash),kind=hash.startsWith('image=')?'image':'viewer';return{kind,file:params.get(kind),version:params.get('version')||state?.report?.version};}return{kind:'dashboard',anchor:['snapshots','participants'].includes(hash)?hash:''};}
+  async function loadImage(parsed,epoch){
+    const title=parsed.file?.endsWith('engineer-final-body-dimensions.png')?'Инженерная схема размеров':'Изображение к отчёту';
+    app.innerHTML=`<div class="document-shell image-shell"><div class="document-tools"><a class="button secondary" href="#report">← К отчёту</a><span class="image-title">${esc(title)}</span><button class="text-button reload-assets" data-action="reload-document">Обновить изображение</button></div><main class="image-content"><div class="image-loading" role="status"><div class="loading-mark" aria-hidden="true"></div><p>Загружаем защищённое изображение…</p></div></main></div>`;
+    const controller=new AbortController();const requestTimer=setTimeout(()=>controller.abort(),35000);
+    try{
+      if(!isImagePath(parsed.file))throw new Error('Это изображение не поддерживается. Вернитесь к отчёту и откройте материал заново.');
+      const params=new URLSearchParams({version:parsed.version||'',path:parsed.file});
+      const result=await api('asset-url?'+params.toString(),{signal:controller.signal});
+      clearTimeout(requestTimer);
+      if(epoch!==documentEpoch)return;
+      const url=new URL(result.url),storageOrigin=new URL(API).origin;
+      if(url.origin!==storageOrigin||!url.pathname.startsWith('/storage/v1/object/sign/iqoko-review/'))throw new Error('Не удалось получить защищённое изображение.');
+      const image=document.createElement('img');image.alt=title;image.referrerPolicy='no-referrer';image.decoding='async';
+      await new Promise((resolve,reject)=>{
+        const timer=setTimeout(()=>{image.onload=null;image.onerror=null;image.removeAttribute('src');reject(new Error('Изображение не успело загрузиться. Проверьте соединение и повторите попытку.'));},35000);
+        image.onload=()=>{clearTimeout(timer);image.onload=null;image.onerror=null;image.naturalWidth>0?resolve():reject(new Error('Не удалось прочитать изображение.'));};
+        image.onerror=()=>{clearTimeout(timer);image.onload=null;image.onerror=null;reject(new Error('Изображение не загрузилось. Повторите загрузку — ссылка будет обновлена.'));};
+        image.src=url.href;
+      });
+      if(epoch!==documentEpoch)return;
+      const content=app.querySelector('.image-content');
+      content.innerHTML='<div class="image-controls"><button class="button secondary" data-image-size="large" aria-pressed="false">Увеличить</button><button class="button secondary" data-image-size="fit" aria-pressed="true">По ширине экрана</button><span role="status">Изображение загружено</span></div><p class="image-help">Для просмотра размеров увеличьте изображение и перемещайте его. На телефоне доступно увеличение двумя пальцами.</p><div class="image-stage" tabindex="0" aria-label="Область просмотра изображения"></div>';
+      const stage=content.querySelector('.image-stage');stage.append(image);
+      content.querySelectorAll('[data-image-size]').forEach(button=>button.addEventListener('click',()=>{
+        const enlarged=button.dataset.imageSize==='large';stage.classList.toggle('is-enlarged',enlarged);stage.scrollTo(0,0);
+        content.querySelectorAll('[data-image-size]').forEach(control=>control.setAttribute('aria-pressed',String((control.dataset.imageSize==='large')===enlarged)));
+      }));
+    }catch(error){
+      if(epoch!==documentEpoch)return;
+      app.querySelector('.image-content').innerHTML=`<div class="frame-error" role="alert"><p>${esc(error.message||'Не удалось загрузить изображение.')}</p><button class="button primary" data-action="reload-document">Повторить загрузку</button>${error.status===401?'<p class="logout-note">Откройте персональную ссылку для повторного входа.</p>':''}</div>`;
+    }finally{clearTimeout(requestTimer);}
+  }
   async function loadDocument(route){
     const epoch=++documentEpoch;const parsed=parseRoute(route);frame=null;dirty=false;window.scrollTo(0,0);
+    if(parsed.kind==='image'){await loadImage(parsed,epoch);return;}
     if(parsed.kind==='print' && identity?.participant.role!=='owner'){errorText='Полные редакции для подписания доступны только владельцу отчёта.';history.replaceState(null,'',location.pathname+'#dashboard');currentRoute='#dashboard';renderDashboard();return;}
     app.innerHTML=`<div class="document-shell"><div class="document-tools"><a class="button secondary" href="#dashboard">← Кабинет</a><a class="brand" href="#report">IQOKO<span>×</span>ЕКС</a><span class="document-title">${parsed.kind==='print'?'Сохранённая редакция для подписания':parsed.kind==='viewer'?'Материалы контрольного опыта':'Совместный отчёт'}</span><span class="document-status" role="status"></span><div class="document-actions">${parsed.kind==='viewer'?'<a class="button secondary" href="#report">К отчёту</a>':''}${parsed.kind==='print'?'<button class="button primary" data-action="print" disabled>Печать / PDF</button>':''}<button class="text-button reload-assets" data-action="reload-document">Обновить материалы</button></div></div>${parsed.kind==='report'?`<nav class="document-navigation" aria-label="Разделы отчёта">${[['summary','Итоги'],['operation','Эксплуатация'],['control','Контроль объёма'],['evidence','Подтверждающие материалы'],['order','Задачи приказа'],['order-discussion','Комментарии по приказу'],['decision','Решения']].map(([id,label])=>`<button data-action="report-anchor" data-anchor="${id}">${label}</button>`).join('')}</nav>`:''}<div class="document-progress"><div class="loading-mark" style="margin:0 auto 20px"></div>Загружаем защищённые материалы…</div></div>`;
     try{
@@ -123,11 +157,11 @@
     if((method==='GET'||!method)&&path.startsWith('asset-url?')){const params=new URLSearchParams(path.slice(10));return params.get('version')===frameVersion&&typeof params.get('path')==='string'&&params.get('path').length<1000;}
     return ((method==='GET'||!method)&&(/^(me|state)$/.test(path)||/^history\/[a-z0-9-]+$/.test(path)))||(method==='PUT'&&/^comments\/[a-z0-9-]+$/.test(path));
   };
-  function openDocumentTab(file,version){
+  function openDocumentTab(file,version,kind='viewer'){
     let popup=null;
     try{
       const url=new URL(location.pathname,location.origin);
-      url.hash=new URLSearchParams({viewer:file,version}).toString();
+      url.hash=new URLSearchParams({[kind]:file,version}).toString();
       popup=window.open('about:blank','_blank');
       if(!popup)throw new Error('Браузер ограничил открытие новой вкладки. Разрешите открытие вкладок для этого сайта.');
       // Initialize only our own same-origin blank tab, before loading the application.
@@ -142,7 +176,7 @@
       app.querySelector('[data-document-tab-notice]')?.remove();
       const note=document.createElement('div');note.className='route-notice';note.dataset.documentTabNotice='';note.setAttribute('role','alert');
       note.append(`${error.message||'Не удалось открыть защищённый материал в новой вкладке.'} `);
-      const retry=document.createElement('button');retry.type='button';retry.className='text-button';retry.textContent='Открыть материал в новой вкладке';retry.addEventListener('click',()=>openDocumentTab(file,version));note.append(retry);
+      const retry=document.createElement('button');retry.type='button';retry.className='text-button';retry.textContent='Открыть материал в новой вкладке';retry.addEventListener('click',()=>openDocumentTab(file,version,kind));note.append(retry);
       app.querySelector('.document-tools')?.after(note);
     }
   }
@@ -152,6 +186,7 @@
       const path=message.path,method=message.options?.method||'GET';if(typeof message.id!=='string'||typeof path!=='string'||!allowedRequest(path,method)||pendingFrameRequests.has(message.id))return;
       const target=event.source;pendingFrameRequests.add(message.id);void(async()=>{try{const value=await api(path,{method,...(method==='PUT'?{body:message.options.body}:{})});target.postMessage({type:'iqoko:response',id:message.id,value},'*');}catch(error){target.postMessage({type:'iqoko:response',id:message.id,error:{message:error.message,status:error.status||0,data:error.data}},'*');}finally{pendingFrameRequests.delete(message.id);}})();
     }else if(message.type==='iqoko:open-asset'&&typeof message.path==='string'&&message.path.length<1000){
+      if(isImagePath(message.path)){openDocumentTab(message.path,frameVersion,'image');return;}
       const popup=window.open('about:blank','_blank');if(popup){popup.opener=null;try{popup.document.title='Открываем вложение';popup.document.body.textContent='Открываем защищённое вложение…';}catch{ /* The fresh URL can still replace this window. */ }}
       void(async()=>{try{
         const params=new URLSearchParams({version:frameVersion,path:message.path});const result=await api('asset-url?'+params.toString());const url=new URL(result.url);if(url.protocol!=='https:')throw new Error('Недопустимый адрес вложения.');if(typeof message.anchor==='string')url.hash=message.anchor;
