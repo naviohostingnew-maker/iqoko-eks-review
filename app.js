@@ -120,6 +120,13 @@
     if(message.type==='iqoko:request'){
       const path=message.path,method=message.options?.method||'GET';if(typeof message.id!=='string'||typeof path!=='string'||!allowedRequest(path,method)||pendingFrameRequests.has(message.id))return;
       const target=event.source;pendingFrameRequests.add(message.id);void(async()=>{try{const value=await api(path,{method,...(method==='PUT'?{body:message.options.body}:{})});target.postMessage({type:'iqoko:response',id:message.id,value},'*');}catch(error){target.postMessage({type:'iqoko:response',id:message.id,error:{message:error.message,status:error.status||0,data:error.data}},'*');}finally{pendingFrameRequests.delete(message.id);}})();
+    }else if(message.type==='iqoko:open-asset'&&typeof message.path==='string'&&message.path.length<1000){
+      const popup=window.open('about:blank','_blank');if(popup){popup.opener=null;try{popup.document.title='Открываем вложение';popup.document.body.textContent='Открываем защищённое вложение…';}catch{ /* The fresh URL can still replace this window. */ }}
+      void(async()=>{try{
+        const params=new URLSearchParams({version:frameVersion,path:message.path});const result=await api('asset-url?'+params.toString());const url=new URL(result.url);if(url.protocol!=='https:')throw new Error('Недопустимый адрес вложения.');if(typeof message.anchor==='string')url.hash=message.anchor;
+        if(popup&&!popup.closed)popup.location.replace(url.href);
+        else{const note=document.createElement('div');note.className='route-notice';note.append('Браузер ограничил открытие новой вкладки. ');const link=document.createElement('a');link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Открыть вложение';note.append(link);app.querySelector('.document-tools').after(note);}
+      }catch(error){if(popup&&!popup.closed)popup.close();const note=document.createElement('div');note.className='route-notice';note.setAttribute('role','alert');note.textContent=error.message;app.querySelector('.document-tools')?.after(note);}})();
     }else if(message.type==='iqoko:height'&&Number.isFinite(message.height))frame.style.height=`${Math.max(300,Math.min(message.height,250000))}px`;
     else if(message.type==='iqoko:scroll-position'&&Number.isFinite(message.top))window.scrollTo({top:window.scrollY+frame.getBoundingClientRect().top+message.top-112,behavior:'smooth'});
     else if(message.type==='iqoko:dirty'){dirty=Boolean(message.dirty);const status=app.querySelector('.document-status');if(status)status.textContent=dirty?'Есть несохранённые изменения':'Комментарии сохраняются на сервере';}

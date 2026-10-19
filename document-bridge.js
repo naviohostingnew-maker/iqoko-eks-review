@@ -31,23 +31,9 @@
     }catch(error){const message=document.createElement('p');message.setAttribute('role','alert');message.textContent=error.message;message.style.cssText='color:#9b4825;font:12px Arial';control.after(message);}
     finally{control.removeAttribute('aria-busy');}})();
   },true);
-  async function openAsset(link,popup){
-    try{
-      const path=decodeURIComponent(link.dataset.reviewAsset);
-      const params=new URLSearchParams({version:window.__IQOKO_FRAME__.reportVersion,path});
-      const result=await window.IQOKOBridge.request('asset-url?'+params.toString());
-      const target=new URL(result.url);if(target.protocol!=='https:')throw new Error('Недопустимый адрес вложения.');
-      if(link.dataset.reviewAssetAnchor)target.hash=link.dataset.reviewAssetAnchor;
-      if(popup&&!popup.closed){popup.location.replace(target.href);}
-      else{
-        const fallback=document.createElement('p');fallback.style.cssText='padding:12px;background:#fff5e9;border:1px solid #e5cda9;border-radius:5px;font:12px/1.5 Arial';
-        fallback.append('Браузер ограничил открытие новой вкладки. ');const fresh=document.createElement('a');fresh.href=target.href;fresh.target='_blank';fresh.rel='noopener noreferrer';fresh.textContent='Открыть вложение';fallback.append(fresh);link.after(fallback);
-      }
-    }catch(error){if(popup&&!popup.closed)popup.close();const message=document.createElement('p');message.setAttribute('role','alert');message.style.cssText='padding:10px;color:#9b4825;background:#fff2e9;font:12px/1.5 Arial';message.textContent=error.status===401?'Сессия завершена. Откройте персональную ссылку для повторного входа.':error.message;link.after(message);}
-  }
   document.addEventListener('click',(event)=>{
     const link=event.target.closest('a');if(!link)return;const href=link.getAttribute('href')||'';
-    if(link.dataset.reviewAsset){event.preventDefault();const popup=window.open('about:blank','_blank');if(popup){popup.opener=null;try{popup.document.title='Открываем вложение';popup.document.body.textContent='Открываем защищённое вложение…';}catch{ /* Window navigation remains available without document access. */ }}void openAsset(link,popup);return;}
+    if(link.dataset.reviewAsset){event.preventDefault();send({type:'iqoko:open-asset',path:decodeURIComponent(link.dataset.reviewAsset),anchor:link.dataset.reviewAssetAnchor||''});return;}
     const route=link.dataset.reviewRoute;const file=link.dataset.reviewDocument;if(route==='report'){event.preventDefault();send({type:'iqoko:navigate',route:'report',anchor:link.dataset.reviewAnchor||''});return;}if(file){event.preventDefault();send({type:'iqoko:navigate',route:'viewer',file});return;}
     if(href==='#review-snapshots'||href==='#review-dashboard'||href==='/#snapshots'||href==='/'||href==='#dashboard'||href==='#snapshots'){event.preventDefault();send({type:'iqoko:navigate',route:'dashboard'});return;}
     if(href==='#review-report'||href==='/report'||href==='#report'){event.preventDefault();send({type:'iqoko:navigate',route:'report',anchor:link.dataset.reviewAnchor||''});return;}
