@@ -1,4 +1,4 @@
-/* Shared report comments. Personal access tokens are never stored here. */
+/* Participant-scoped report comments. Personal access tokens are never stored here. */
 (() => {
   "use strict";
   const draftStore = window.__IQOKO_FRAME__?.drafts || {};
@@ -6,6 +6,7 @@
   let identity = null;
   let reportVersion = "";
   let comments = [];
+  let allCommentsVisible = false;
   let staleReport = false;
   let storageWarning = false;
   let connectionWarning = "";
@@ -32,6 +33,7 @@
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? value : date.toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Moscow" });
   }
+  function visibleComments(records) { return allCommentsVisible ? records : records.filter((comment) => comment.participantId === identity.participant.id); }
   function draftKey(block) { return `iqoko-review-draft:${identity.participant.id}:${reportVersion}:${block.id}`; }
   function getDraft(block) {
     try {
@@ -59,7 +61,7 @@
     else if (blocks.some((block) => block.failed)) statusText.textContent = "Не все комментарии сохранены. Текст остаётся в этой вкладке; повторите сохранение в отмеченном разделе.";
     else if (pending) statusText.textContent = `Несохранённые изменения: ${pending}. Дождитесь подтверждения сохранения.`;
     else if (connectionWarning) statusText.textContent = connectionWarning;
-    else statusText.textContent = identity?.participant.role === "viewer" ? "Комментарии участников загружены с сервера. Ваш доступ — только просмотр." : "Комментарии загружены с сервера. Изменения сохраняются автоматически.";
+    else statusText.textContent = allCommentsVisible ? "Вам доступны комментарии всех участников. Изменения сохраняются автоматически." : identity?.participant.role === "viewer" ? "Вы видите только свои сохранённые комментарии. Ваш доступ — только просмотр." : "Ваши комментарии видны только вам и владельцу отчёта. Изменения сохраняются автоматически.";
     if (storageWarning) statusText.textContent += " Локальная копия недоступна: не закрывайте вкладку до подтверждения сохранения.";
     statusText.parentElement.dataset.pending = pending ? "true" : "false";
   }
@@ -78,7 +80,7 @@
   function renderOthers(block) {
     block.others.replaceChildren();
     const others = comments.filter((comment) => comment.thesisId === block.id && comment.body.trim() && (!block.textarea || comment.participantId !== identity.participant.id));
-    if (!others.length) block.others.append(node("p", "srv-empty", "Комментариев других участников пока нет."));
+    if (!others.length && (allCommentsVisible || !block.textarea)) block.others.append(node("p", "srv-empty", allCommentsVisible ? "Комментариев других участников пока нет." : "Ваших сохранённых комментариев к этому разделу пока нет."));
     else others.forEach((comment) => block.others.append(commentNode(comment)));
   }
   function updateComment(comment, block) {
@@ -154,14 +156,15 @@
     block.historyPanel.replaceChildren(node("p", "srv-empty", "Загружаем историю…"));
     try {
       const data = await request(`history/${encodeURIComponent(block.id)}`); block.historyPanel.replaceChildren();
-      if (!data.history.length) block.historyPanel.append(node("p", "srv-empty", "История комментариев пока пуста."));
-      else data.history.forEach((comment) => { const item = commentNode(comment); item.prepend(node("small", "srv-history-revision", `Изменение № ${comment.revision}`)); block.historyPanel.append(item); });
+      const history = visibleComments(data.history);
+      if (!history.length) block.historyPanel.append(node("p", "srv-empty", allCommentsVisible ? "История комментариев пока пуста." : "История ваших комментариев пока пуста."));
+      else history.forEach((comment) => { const item = commentNode(comment); item.prepend(node("small", "srv-history-revision", `Изменение № ${comment.revision}`)); block.historyPanel.append(item); });
     } catch (error) { block.historyPanel.replaceChildren(node("p", "srv-error-text", error.message)); }
   }
   function buildBlock(element) {
     const id = element.dataset.review; const block = { id, element, timer: null, saving: false, failed: false, conflict: null, recovery: null, revision: 0, savedBody: "", intent: null, textarea: null };
     element.replaceChildren(); element.classList.add("srv-review");
-    const head = node("div", "srv-heading"); head.append(node("strong", "", "Дополнения и комментарии участников"));
+    const head = node("div", "srv-heading"); head.append(node("strong", "", allCommentsVisible ? "Дополнения и комментарии участников" : "Ваши дополнения и комментарии"));
     block.status = node("span", "srv-save-status", ""); block.status.setAttribute("role", "status"); head.append(block.status); element.append(head);
     block.others = node("div", "srv-comments"); element.append(block.others);
     block.recoveryPanel = node("div"); block.conflictPanel = node("div"); element.append(block.recoveryPanel);
@@ -181,7 +184,7 @@
       const draft = getDraft(block); if (draft) showRecovery(block, draft, own || null);
       setBlockStatus(block, block.recovery ? "Есть локальный черновик" : own ? "Сохранено на сервере" : "", block.recovery ? "pending" : "saved");
     } else { block.status.textContent = "Доступ для просмотра"; }
-    const footer = node("div", "srv-block-footer"); block.historyButton = button("История комментариев", () => void loadHistory(block)); block.historyButton.setAttribute("aria-expanded", "false"); footer.append(block.historyButton); element.append(footer);
+    const footer = node("div", "srv-block-footer"); block.historyButton = button(allCommentsVisible ? "История комментариев" : "История ваших комментариев", () => void loadHistory(block)); block.historyButton.setAttribute("aria-expanded", "false"); footer.append(block.historyButton); element.append(footer);
     block.historyPanel = node("div", "srv-history"); block.historyPanel.hidden = true; element.append(block.historyPanel);
     renderOthers(block); blocks.push(block);
   }
@@ -190,7 +193,7 @@
     try {
       const state = await request("state"); connectionWarning = "";
       if (state.report?.version !== reportVersion) { staleReport = true; blocks.forEach((block) => { if (block.textarea) block.textarea.readOnly = true; if (block.saveButton) block.saveButton.disabled = true; }); updateStatus(); return; }
-      comments = state.comments;
+      allCommentsVisible = identity.participant.role === "owner" && state.commentVisibility === "all"; comments = visibleComments(state.comments);
       blocks.forEach((block) => {
         renderOthers(block); if (!block.textarea || block.conflict || block.recovery) return;
         const current = comments.find((comment) => comment.thesisId === block.id && comment.participantId === identity.participant.id) || null;
@@ -215,11 +218,11 @@
     window.addEventListener("iqoko-storage-unavailable",()=>{storageWarning=true;updateStatus();});
     elements.forEach((element) => { element.replaceChildren(node("p", "srv-empty", "Загружаем комментарии…")); });
     try {
-      identity = await request("me"); const state = await request("state"); comments = state.comments;
+      identity = await request("me"); const state = await request("state"); allCommentsVisible = identity.participant.role === "owner" && state.commentVisibility === "all"; comments = visibleComments(state.comments);
       reportVersion = window.__IQOKO_REPORT_VERSION__ || state.report?.version || "";
       staleReport = reportVersion !== state.report?.version;
       const global = node("div", "srv-global"); statusText = node("span"); statusText.setAttribute("role", "status"); global.append(statusText);
-      const link = node("a", "", "Кабинет и редакции для печати ↗"); link.href = "#review-dashboard"; global.append(link);
+      const link = node("a", "", identity.participant.role === "owner" ? "Кабинет и редакции для печати ↗" : "Кабинет ↗"); link.href = "#review-dashboard"; global.append(link);
       const activeLink = node("a", "", "Текущая редакция ↗"); activeLink.href = "#review-report";  activeLink.rel = "noopener"; global.append(activeLink);
       const main = document.querySelector("main"); if (main) main.before(global); else document.body.prepend(global);
       elements.forEach(buildBlock); updateStatus();
