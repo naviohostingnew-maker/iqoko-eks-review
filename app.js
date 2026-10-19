@@ -36,13 +36,34 @@
   function header() { return `<header class="portal-header"><a class="brand" href="#dashboard" aria-label="IQOKO и ЕКС — кабинет отчёта">IQOKO<span>×</span>ЕКС</a><span class="header-caption">Совместный отчёт · ТЭЦ-25</span>${identity ? '<button class="text-button" data-action="logout">Выйти</button>' : ''}</header>`; }
   function alerts() { return `${errorText ? `<div class="alert error" role="alert">${esc(errorText)}<button class="text-button" data-action="dismiss" aria-label="Закрыть сообщение">×</button></div>` : ''}${notice ? `<div class="alert success" role="status">${esc(notice)}</div>` : ''}${!storageAvailable ? '<div class="alert error">Браузер не разрешает хранить сессию в этой вкладке. После её обновления потребуется снова открыть персональную ссылку.</div>' : ''}`; }
   function invitation() { return freshLink ? `<div class="invitation" role="status"><div class="panel-heading"><h3>Ссылка для ${esc(freshLink.name)}</h3><button class="text-button" data-action="close-invitation">Закрыть</button></div><p>Ссылка показывается только сейчас. Скопируйте её перед закрытием этого блока.</p><div class="copy-row"><input aria-label="Персональная ссылка" value="${esc(freshLink.url)}" readonly><button class="button primary" data-action="copy-link">Скопировать</button></div></div>` : ''; }
+  function accessPanel() {
+    const material=['material','image','viewer'].includes(parseRoute(currentRoute||location.hash).kind);
+    return `<section class="access-panel"><span class="eyebrow">IQOKO × ЕКС</span><h1>${material?'Дополнительные материалы отчёта':'Совместное рассмотрение результатов пилота'}</h1><p>${material?'Материал доступен участникам отчёта. Вставьте вашу персональную ссылку — после входа откроется выбранный материал.':'Для входа вставьте персональную ссылку, которую вы получили от руководителя проекта.'}</p><form id="access-form" class="access-form"><label for="personal-access-link">Ваша персональная ссылка</label><input id="personal-access-link" name="personalLink" type="password" required maxlength="2048" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Вставьте ссылку целиком"><button class="button primary" type="submit">${material?'Войти и открыть материал':'Войти в кабинет'}</button></form><div class="access-note">Используйте только свою персональную ссылку. Если она перестала действовать, обратитесь к руководителю проекта за новой.</div></section>`;
+  }
+  function personalToken(value) {
+    try {
+      const url=new URL(value.trim()),params=new URLSearchParams(url.hash.slice(1));
+      const token=params.get('access');
+      if(url.origin!==location.origin||url.pathname!==location.pathname||url.search||url.username||url.password||params.getAll('access').length!==1||[...params.keys()].some(key=>key!=='access')||!token||!/^[A-Za-z0-9_-]{43}$/.test(token))throw new Error('invalid');
+      return token;
+    }catch{throw new Error('Вставьте персональную ссылку этого отчёта целиком. Ссылка на материал не подходит для входа.');}
+  }
+  async function enterPersonalAccess(token,destination='') {
+    const result=await api('login',{method:'POST',body:JSON.stringify({token})});
+    saveSession(result.sessionToken);identity={participant:result.participant,csrf:result.csrf};state=null;errorText='';notice='';freshLink=null;dirty=false;
+    await refreshState();history.replaceState(null,'',location.pathname+location.search+destination);await applyRoute(destination);
+  }
+  function expiredAccess(error) {
+    if(error.status!==401)return false;
+    saveSession('');identity=null;state=null;errorText='Сеанс доступа завершён или доступ отозван. Войдите по вашей персональной ссылке.';renderDashboard();return true;
+  }
   function renderDashboard(anchor = "") {
     frame = null; dirty = false; documentEpoch += 1;
     const owner = identity?.participant.role === "owner";
     const snapshots = owner ? [...(state?.snapshots || [])].sort((a,b) => b.number-a.number) : [];
     const participants = state?.participants || [];
     const comments = state?.comments.filter((item) => item.body.trim() && (owner || item.participantId === identity?.participant.id)) || [];
-    app.innerHTML = `<div class="portal">${header()}<main class="portal-main">${alerts()}${!identity ? `<section class="access-panel"><span class="eyebrow">IQOKO × ЕКС</span><h1>Совместное рассмотрение результатов пилота</h1><p>Вход по персональной ссылке, которую предоставил координатор. Откройте эту ссылку, чтобы читать отчёт и оставлять комментарии от своего имени.</p><div class="access-note">Если ссылка перестала действовать, обратитесь к координатору за новой.</div></section>` : `
+    app.innerHTML = `<div class="portal">${header()}<main class="portal-main">${alerts()}${!identity ? accessPanel() : `
     <section class="welcome"><div><span class="eyebrow">Рабочие материалы пилота</span><h1>Кабинет совместного отчёта</h1><p>${owner ? "Результаты эксплуатации, комментарии всех участников и редакции для подписания." : "Результаты эксплуатации и ваши комментарии к отчёту."}</p></div><div class="identity-card"><strong>${esc(identity.participant.name)}</strong><span>${esc([identity.participant.title,identity.participant.organization].filter(Boolean).join(" · "))}</span><small>${esc(role(identity.participant.role))}</small></div></section>
     <section class="report-card"><div><span class="eyebrow">Текущая рабочая редакция</span><h2>${esc(state?.report?.title || "Отчёт подготавливается")}</h2><p>${state?.report ? (owner ? "Вам доступны комментарии всех участников. Каждый приглашённый видит только свои комментарии и историю их изменений." : "Ваши комментарии и история изменений доступны вам и владельцу отчёта. Остальные участники их не видят.") : "Координатор добавляет исходные материалы. Доступ к кабинету уже открыт."}</p>${state?.report ? `<div class="report-meta"><span>Редакция ${esc(state.report.version)}</span><span>${owner ? "Всего комментариев" : "Ваших комментариев"}: ${comments.length}</span>${owner ? `<span>${participants.filter(p=>!inactive(p)).length} участников</span>` : ""}</div>` : ''}</div>${state?.report ? '<a class="button primary" href="#report">Открыть отчёт ↗</a>' : ''}</section>
     ${owner ? `<nav class="section-nav" aria-label="Разделы кабинета"><a href="#snapshots">Редакции для печати</a><a href="#participants">Участники и доступ</a></nav>
@@ -54,6 +75,7 @@
     <div class="participant-list">${participants.map(p=>`<article class="participant-row${inactive(p)?' inactive':''}"><div class="avatar" aria-hidden="true">${esc(p.name.split(/\s+/).map(v=>v[0]).slice(0,2).join(''))}</div><div class="participant-info"><h3>${esc(p.name)}</h3><p>${esc([p.title,p.organization].filter(Boolean).join(' · '))}</p><small>${esc(inactive(p)?'Доступ отозван':role(p.role))}</small></div>${p.id!==identity.participant.id && p.role!=="owner" ? `<div class="participant-actions"><button class="text-button" data-action="rotate" data-id="${esc(p.id)}">Новая ссылка</button>${!inactive(p)?`<button class="text-button danger" data-action="revoke" data-id="${esc(p.id)}">Отозвать доступ</button>`:''}</div>`:''}</article>`).join('')}</div>
     <form class="participant-form" id="participant-form"><h3>Добавить участника</h3><div class="form-grid"><label>Имя и фамилия<input name="name" required maxlength="160" autocomplete="off"></label><label>Организация<input name="organization" required maxlength="160" value="ГК ЕКС"></label><label>Должность<input name="title" maxlength="200"></label><label>Доступ<select name="role"><option value="reviewer">Просмотр и свои комментарии</option><option value="viewer">Только просмотр</option></select></label></div><button class="button primary" type="submit">Создать персональную ссылку</button></form></section>`:''}`}</main><footer class="portal-footer"><span>IQOKO (ВНДС) × ГК ЕКС</span><span>Материалы для совместного рассмотрения</span></footer></div>`;
     const form = document.getElementById("participant-form"); if (form) form.addEventListener("submit", (event)=>{ event.preventDefault(); void createParticipant(form); });
+    const accessForm=document.getElementById('access-form');if(accessForm)accessForm.addEventListener('submit',event=>{event.preventDefault();const field=accessForm.elements.namedItem('personalLink');let token;try{token=personalToken(field.value);}catch(error){field.value='';setMessage(error.message);return;}field.value='';const destination=currentRoute||location.hash;void runAction(()=>enterPersonalAccess(token,destination));});
     document.querySelectorAll("#checked-contents,#checked-snapshot").forEach(input=>input.addEventListener("change",()=>{ document.getElementById("create-snapshot").disabled=!(document.getElementById("checked-contents").checked&&document.getElementById("checked-snapshot").checked); }));
     const linkField=document.querySelector('.copy-row input'); if(linkField) linkField.addEventListener('focus',()=>linkField.select());
     if(anchor) document.getElementById(anchor)?.scrollIntoView();
@@ -95,7 +117,27 @@
   function draftsFor(version){const result={};try{const prefix=`iqoko-review-draft:${identity.participant.id}:${version}:`;for(const key of Object.keys(sessionStorage)){if(key.startsWith(prefix))result[key]=sessionStorage.getItem(key);}}catch{storageAvailable=false;}return result;}
   async function getPublicScript(name){try{const response=await fetch(new URL(name,location.href),{cache:'no-cache'});if(!response.ok)throw new Error('Не удалось загрузить интерфейс комментариев.');return await response.text();}catch(error){throw new Error(error.message||'Не удалось загрузить интерфейс комментариев.');}}
   const isImagePath=(path)=>typeof path==='string'&&path.length<1000&&/\.(?:png|jpe?g|webp|gif)$/i.test(path);
-  function parseRoute(route){const hash=route.replace(/^#/,'');if(hash==='report')return{kind:'report'};if(hash.startsWith('print='))return{kind:'print',snapshot:decodeURIComponent(hash.slice(6))};if(hash.startsWith('viewer=')||hash.startsWith('image=')){const params=new URLSearchParams(hash),kind=hash.startsWith('image=')?'image':'viewer';return{kind,file:params.get(kind),version:params.get('version')||state?.report?.version};}return{kind:'dashboard',anchor:['snapshots','participants'].includes(hash)?hash:''};}
+  function parseRoute(route){const hash=route.replace(/^#/,'');if(hash==='report')return{kind:'report'};if(hash.startsWith('print='))return{kind:'print',snapshot:new URLSearchParams(hash).get('print')};if(/^(viewer|image|material)=/.test(hash)){const params=new URLSearchParams(hash),kind=hash.slice(0,hash.indexOf('='));return{kind,file:params.get(kind),version:params.get('version')||state?.report?.version,anchor:params.get('anchor')||''};}return{kind:'dashboard',anchor:['snapshots','participants'].includes(hash)?hash:''};}
+  function resolveMaterial(parsed){
+    const file=parsed.file,version=parsed.version;
+    if(typeof file!=='string'||file.length>240||!file||/[\\?#\u0000-\u001f\u007f]/.test(file)||file.startsWith('/')||file.split('/').some(part=>!part||part==='.'||part==='..')||typeof version!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(version)||parsed.anchor.length>200)throw new Error('Ссылка на материал некорректна. Откройте материал из отчёта или запросите актуальную ссылку.');
+    const kind=/\.html$/i.test(file)?'viewer':isImagePath(file)?'image':/\.(?:pdf|csv|ply)$/i.test(file)?'attachment':null;
+    if(!kind)throw new Error('Этот тип материала не поддерживается. Откройте его из отчёта.');
+    return{...parsed,kind};
+  }
+  function protectedAssetURL(value){const url=new URL(value);if(url.origin!==new URL(API).origin||url.username||url.password||!url.pathname.startsWith('/storage/v1/object/sign/iqoko-review/'))throw new Error('Не удалось получить защищённый материал.');return url;}
+  async function loadAttachment(parsed,epoch){
+    app.innerHTML=`<div class="document-shell"><div class="document-tools"><a class="button secondary" href="#report">← К отчёту</a><span class="image-title">Дополнительный материал</span><button class="text-button reload-assets" data-action="reload-document">Обновить ссылку</button></div><main class="material-content"><div class="image-loading" role="status"><div class="loading-mark" aria-hidden="true"></div><p>Подготавливаем защищённый файл…</p></div></main></div>`;
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),35000);
+    try{
+      const result=await api('asset-url?'+new URLSearchParams({path:parsed.file,version:parsed.version}),{signal:controller.signal});
+      if(epoch!==documentEpoch)return;
+      const url=protectedAssetURL(result.url);if(parsed.anchor)url.hash=parsed.anchor;
+      const content=app.querySelector('.material-content');content.innerHTML=`<section class="material-ready"><span class="eyebrow">Материал к отчёту</span><h1>${esc(parsed.file.split('/').pop())}</h1><p>Файл подготовлен. Откройте его в новой вкладке или сохраните на устройство.</p><a class="button primary material-open" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">${/\.pdf$/i.test(parsed.file)?'Открыть PDF':'Открыть / скачать файл'}</a><p class="small-note">Если файл не открылся, нажмите «Обновить ссылку» и повторите открытие.</p></section>`;
+      const link=content.querySelector('.material-open');link.href=url.href;
+      const expires=Date.parse(result.expiresAt);link.addEventListener('click',event=>{if(!Number.isFinite(expires)||Date.now()>=expires){event.preventDefault();void loadDocument(currentRoute);}});
+    }catch(error){if(epoch!==documentEpoch||expiredAccess(error))return;app.querySelector('.material-content').innerHTML=`<div class="frame-error" role="alert"><p>${esc(error.message||'Не удалось открыть файл.')}</p><button class="button primary" data-action="reload-document">Повторить загрузку</button></div>`;}finally{clearTimeout(timer);}
+  }
   async function loadImage(parsed,epoch){
     const title=parsed.file?.endsWith('engineer-final-body-dimensions.png')?'Инженерная схема размеров':'Изображение к отчёту';
     app.innerHTML=`<div class="document-shell image-shell"><div class="document-tools"><a class="button secondary" href="#report">← К отчёту</a><span class="image-title">${esc(title)}</span><button class="text-button reload-assets" data-action="reload-document">Обновить изображение</button></div><main class="image-content"><div class="image-loading" role="status"><div class="loading-mark" aria-hidden="true"></div><p>Загружаем защищённое изображение…</p></div></main></div>`;
@@ -106,8 +148,7 @@
       const result=await api('asset-url?'+params.toString(),{signal:controller.signal});
       clearTimeout(requestTimer);
       if(epoch!==documentEpoch)return;
-      const url=new URL(result.url),storageOrigin=new URL(API).origin;
-      if(url.origin!==storageOrigin||!url.pathname.startsWith('/storage/v1/object/sign/iqoko-review/'))throw new Error('Не удалось получить защищённое изображение.');
+      const url=protectedAssetURL(result.url);
       const image=document.createElement('img');image.alt=title;image.referrerPolicy='no-referrer';image.decoding='async';
       await new Promise((resolve,reject)=>{
         const timer=setTimeout(()=>{image.onload=null;image.onerror=null;image.removeAttribute('src');reject(new Error('Изображение не успело загрузиться. Проверьте соединение и повторите попытку.'));},35000);
@@ -124,13 +165,16 @@
         content.querySelectorAll('[data-image-size]').forEach(control=>control.setAttribute('aria-pressed',String((control.dataset.imageSize==='large')===enlarged)));
       }));
     }catch(error){
-      if(epoch!==documentEpoch)return;
-      app.querySelector('.image-content').innerHTML=`<div class="frame-error" role="alert"><p>${esc(error.message||'Не удалось загрузить изображение.')}</p><button class="button primary" data-action="reload-document">Повторить загрузку</button>${error.status===401?'<p class="logout-note">Откройте персональную ссылку для повторного входа.</p>':''}</div>`;
+      if(epoch!==documentEpoch||expiredAccess(error))return;
+      app.querySelector('.image-content').innerHTML=`<div class="frame-error" role="alert"><p>${esc(error.message||'Не удалось загрузить изображение.')}</p><button class="button primary" data-action="reload-document">Повторить загрузку</button></div>`;
     }finally{clearTimeout(requestTimer);}
   }
   async function loadDocument(route){
-    const epoch=++documentEpoch;const parsed=parseRoute(route);frame=null;dirty=false;window.scrollTo(0,0);
+    const epoch=++documentEpoch;let parsed=parseRoute(route);frame=null;dirty=false;window.scrollTo(0,0);
+    if(parsed.kind==='material'){try{parsed=resolveMaterial(parsed);}catch(error){app.innerHTML=`<div class="document-shell"><div class="document-tools"><a class="button secondary" href="#report">← К отчёту</a></div><div class="frame-error" role="alert"><p>${esc(error.message)}</p></div></div>`;return;}}
     if(parsed.kind==='image'){await loadImage(parsed,epoch);return;}
+    if(parsed.kind==='attachment'){await loadAttachment(parsed,epoch);return;}
+    if(parsed.kind==='viewer'&&parsed.anchor)pendingAnchor=parsed.anchor.replace(/^#/,'');
     if(parsed.kind==='print' && identity?.participant.role!=='owner'){errorText='Полные редакции для подписания доступны только владельцу отчёта.';history.replaceState(null,'',location.pathname+'#dashboard');currentRoute='#dashboard';renderDashboard();return;}
     app.innerHTML=`<div class="document-shell"><div class="document-tools"><a class="button secondary" href="#dashboard">← Кабинет</a><a class="brand" href="#report">IQOKO<span>×</span>ЕКС</a><span class="document-title">${parsed.kind==='print'?'Сохранённая редакция для подписания':parsed.kind==='viewer'?'Материалы контрольного опыта':'Совместный отчёт'}</span><span class="document-status" role="status"></span><div class="document-actions">${parsed.kind==='viewer'?'<a class="button secondary" href="#report">К отчёту</a>':''}${parsed.kind==='print'?'<button class="button primary" data-action="print" disabled>Печать / PDF</button>':''}<button class="text-button reload-assets" data-action="reload-document">Обновить материалы</button></div></div>${parsed.kind==='report'?`<nav class="document-navigation" aria-label="Разделы отчёта">${[['summary','Итоги'],['operation','Эксплуатация'],['control','Контроль объёма'],['evidence','Подтверждающие материалы'],['order','Задачи приказа'],['order-discussion','Комментарии по приказу'],['decision','Решения']].map(([id,label])=>`<button data-action="report-anchor" data-anchor="${id}">${label}</button>`).join('')}</nav>`:''}<div class="document-progress"><div class="loading-mark" style="margin:0 auto 20px"></div>Загружаем защищённые материалы…</div></div>`;
     try{
@@ -151,7 +195,7 @@
       frame.srcdoc='<!doctype html>\n'+doc.documentElement.outerHTML;app.querySelector('.document-progress').replaceWith(frame);
       app.querySelector('[data-action="print"]')?.removeAttribute('disabled');
       if(pendingAnchor){const anchor=pendingAnchor;pendingAnchor='';frame.addEventListener('load',()=>{setTimeout(()=>frame?.contentWindow?.postMessage({type:'iqoko:scroll',anchor},'*'),300);},{once:true});}
-    }catch(error){if(epoch!==documentEpoch)return;const target=app.querySelector('.document-progress');if(target)target.outerHTML=`<div class="frame-error" role="alert"><p>${esc(error.message)}</p><button class="button secondary" data-action="reload-document">Повторить загрузку</button>${error.status===401?'<p class="logout-note">Откройте персональную ссылку для повторного входа.</p>':''}</div>`;}
+    }catch(error){if(epoch!==documentEpoch||expiredAccess(error))return;const target=app.querySelector('.document-progress');if(target)target.outerHTML=`<div class="frame-error" role="alert"><p>${esc(error.message)}</p><button class="button secondary" data-action="reload-document">Повторить загрузку</button></div>`;}
   }
   const allowedRequest=(path,method)=>{
     if((method==='GET'||!method)&&path.startsWith('asset-url?')){const params=new URLSearchParams(path.slice(10));return params.get('version')===frameVersion&&typeof params.get('path')==='string'&&params.get('path').length<1000;}
@@ -212,13 +256,13 @@
     }
   });
   async function applyRoute(next){currentRoute=next;const parsed=parseRoute(next);if(!identity){renderDashboard();return;}if(parsed.kind==='dashboard'){try{await refreshState();}catch(error){errorText=error.message;}renderDashboard(parsed.anchor);}else await loadDocument(next);}
-  window.addEventListener('hashchange',()=>{const next=location.hash;const incoming=new URLSearchParams(next.slice(1)).get('access');if(incoming){history.replaceState(null,'',location.pathname);const enter=async()=>{try{const result=await api('login',{method:'POST',body:JSON.stringify({token:incoming})});saveSession(result.sessionToken);identity={participant:result.participant,csrf:result.csrf};errorText='';notice='';freshLink=null;dirty=false;await applyRoute('');}catch(error){setMessage(error.message);}};if(dirty)confirmAction('Открыть другую персональную ссылку','Есть несохранённые комментарии. Они останутся локальным черновиком для прежнего участника.',enter);else void enter();return;}if(next===currentRoute)return;if(dirty){history.replaceState(null,'',location.pathname+currentRoute);confirmAction('Есть несохранённые комментарии','Если перейти сейчас, текст останется локальным черновиком в этой вкладке. Дождитесь сохранения либо подтвердите переход.',async()=>{dirty=false;history.replaceState(null,'',location.pathname+next);await applyRoute(next);});return;}void applyRoute(next);});
+  window.addEventListener('hashchange',()=>{const next=location.hash;const incoming=new URLSearchParams(next.slice(1)).get('access');if(incoming){const destination=!identity?currentRoute:'';history.replaceState(null,'',location.pathname+location.search+destination);const enter=async()=>{try{await enterPersonalAccess(incoming,destination);}catch(error){setMessage(error.message);}};if(dirty)confirmAction('Открыть другую персональную ссылку','Есть несохранённые комментарии. Они останутся локальным черновиком для прежнего участника.',enter);else void enter();return;}if(next===currentRoute)return;if(dirty){history.replaceState(null,'',location.pathname+currentRoute);confirmAction('Есть несохранённые комментарии','Если перейти сейчас, текст останется локальным черновиком в этой вкладке. Дождитесь сохранения либо подтвердите переход.',async()=>{dirty=false;history.replaceState(null,'',location.pathname+next);await applyRoute(next);});return;}void applyRoute(next);});
   window.addEventListener('beforeunload',(event)=>{if(dirty){event.preventDefault();event.returnValue='';}});
   async function init(){
     let usedLink=false;
     // Remove the personal credential before any network request or report rendering.
     const fragment=new URLSearchParams(location.hash.slice(1));const token=fragment.get('access');if(token){usedLink=true;history.replaceState(null,'',location.pathname+location.search);}
-    sessionToken=readSession();
+    currentRoute=location.hash;sessionToken=readSession();
     try{if(token){const result=await api('login',{method:'POST',body:JSON.stringify({token})});saveSession(result.sessionToken);identity={participant:result.participant,csrf:result.csrf};}if(!sessionToken){renderDashboard();return;}identity=await api('me');await refreshState();await applyRoute(location.hash);}catch(error){if(error.status===401){saveSession('');identity=null;if(usedLink)errorText='Персональная ссылка недействительна или отозвана. Обратитесь к координатору за новой.';}else errorText=error.message;renderDashboard();}
   }
   void init();
