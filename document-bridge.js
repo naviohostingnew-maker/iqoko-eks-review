@@ -19,18 +19,12 @@
   function height(){if(window.__IQOKO_FRAME__?.kind==='report')return;const value=Math.max(window.__IQOKO_FRAME__?.kind==='viewer'?760:300,document.body.scrollHeight,Math.ceil(document.body.getBoundingClientRect().height));send({type:'iqoko:height',height:value});}
   let measureTimer=null;const schedule=()=>{clearTimeout(measureTimer);measureTimer=setTimeout(height,100);};
   new ResizeObserver(schedule).observe(document.body);window.addEventListener('load',schedule);window.addEventListener('resize',schedule);document.querySelectorAll('img').forEach(image=>image.addEventListener('load',schedule));schedule();
-  const previewReady=new WeakSet();
+  // Match dynamic trip thumbnails to paths already supplied by the protected report.
+  const imagePaths=new Map([...document.querySelectorAll('[data-review-image]')].map(control=>[control.dataset.image,decodeURIComponent(control.dataset.reviewImage)]));
   document.addEventListener('click',(event)=>{
     const control=event.target.closest('[data-review-image]');if(!control)return;
-    if(previewReady.has(control)){previewReady.delete(control);return;}
-    event.preventDefault();event.stopImmediatePropagation();control.setAttribute('aria-busy','true');
-    void(async()=>{try{
-      const params=new URLSearchParams({version:window.__IQOKO_FRAME__.reportVersion,path:decodeURIComponent(control.dataset.reviewImage)});
-      const result=await window.IQOKOBridge.request('asset-url?'+params.toString());
-      const url=new URL(result.url);if(url.protocol!=='https:')throw new Error('Недопустимый адрес изображения.');
-      control.dataset.image=url.href;previewReady.add(control);control.click();
-    }catch(error){const message=document.createElement('p');message.setAttribute('role','alert');message.textContent=error.message;message.style.cssText='color:#9b4825;font:12px Arial';control.after(message);}
-    finally{control.removeAttribute('aria-busy');}})();
+    event.preventDefault();event.stopImmediatePropagation();
+    const path=imagePaths.get(control.dataset.image);if(path)send({type:'iqoko:open-asset',path,anchor:''});
   },true);
   document.addEventListener('click',(event)=>{
     const link=event.target.closest('a');if(!link)return;const href=link.getAttribute('href')||'';

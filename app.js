@@ -11,7 +11,7 @@
   class ApiError extends Error { constructor(message, status, data) { super(message); this.status = status; this.data = data; } }
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
   const date = (value) => new Date(value).toLocaleString("ru-RU", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Moscow" });
-  const role = (value) => ({ owner: "Координатор", reviewer: "Участник обсуждения", viewer: "Просмотр" }[value] || "Участник");
+  const role = (value) => ({ owner: "Управление отчётом", reviewer: "Участник обсуждения", viewer: "Просмотр" }[value] || "Участник");
   const inactive = (person) => person.active === false || Boolean(person.revokedAt);
   function readSession() { try { return sessionStorage.getItem(SESSION_KEY) || ""; } catch { storageAvailable = false; return ""; } }
   function saveSession(value) { sessionToken = value; try { if (value) sessionStorage.setItem(SESSION_KEY, value); else sessionStorage.removeItem(SESSION_KEY); } catch { storageAvailable = false; } }
@@ -115,6 +115,29 @@
     if((method==='GET'||!method)&&path.startsWith('asset-url?')){const params=new URLSearchParams(path.slice(10));return params.get('version')===frameVersion&&typeof params.get('path')==='string'&&params.get('path').length<1000;}
     return ((method==='GET'||!method)&&(/^(me|state)$/.test(path)||/^history\/[a-z0-9-]+$/.test(path)))||(method==='PUT'&&/^comments\/[a-z0-9-]+$/.test(path));
   };
+  function openDocumentTab(file,version){
+    let popup=null;
+    try{
+      const url=new URL(location.pathname,location.origin);
+      url.hash=new URLSearchParams({viewer:file,version}).toString();
+      popup=window.open('about:blank','_blank');
+      if(!popup)throw new Error('Браузер ограничил открытие новой вкладки. Разрешите открытие вкладок для этого сайта.');
+      // Initialize only our own same-origin blank tab, before loading the application.
+      // Neither the personal link nor the session credential is put in the URL or viewer.
+      popup.opener=null;
+      popup.sessionStorage.clear();
+      popup.sessionStorage.setItem(SESSION_KEY,sessionToken);
+      popup.location.replace(url.href);
+      app.querySelector('[data-document-tab-notice]')?.remove();
+    }catch(error){
+      if(popup&&!popup.closed)popup.close();
+      app.querySelector('[data-document-tab-notice]')?.remove();
+      const note=document.createElement('div');note.className='route-notice';note.dataset.documentTabNotice='';note.setAttribute('role','alert');
+      note.append(`${error.message||'Не удалось открыть защищённый материал в новой вкладке.'} `);
+      const retry=document.createElement('button');retry.type='button';retry.className='text-button';retry.textContent='Открыть материал в новой вкладке';retry.addEventListener('click',()=>openDocumentTab(file,version));note.append(retry);
+      app.querySelector('.document-tools')?.after(note);
+    }
+  }
   window.addEventListener('message',(event)=>{
     if(!frame||event.source!==frame.contentWindow||event.origin!=='null')return;const message=event.data;if(!message||typeof message!=='object')return;
     if(message.type==='iqoko:request'){
@@ -131,7 +154,7 @@
     else if(message.type==='iqoko:scroll-position'&&Number.isFinite(message.top))window.scrollTo({top:window.scrollY+frame.getBoundingClientRect().top+message.top-112,behavior:'smooth'});
     else if(message.type==='iqoko:dirty'){dirty=Boolean(message.dirty);const status=app.querySelector('.document-status');if(status)status.textContent=dirty?'Есть несохранённые изменения':'Комментарии сохраняются на сервере';}
     else if(message.type==='iqoko:navigate'){
-      if(message.route==='dashboard')location.hash='snapshots';else if(message.route==='report'){pendingAnchor=typeof message.anchor==='string'?message.anchor.replace(/^#/,''):'';location.hash='report';}else if(message.route==='viewer'&&typeof message.file==='string')location.hash=`viewer=${encodeURIComponent(message.file)}&version=${encodeURIComponent(frameVersion)}`;
+      if(message.route==='dashboard')location.hash='snapshots';else if(message.route==='report'){pendingAnchor=typeof message.anchor==='string'?message.anchor.replace(/^#/,''):'';location.hash='report';}else if(message.route==='viewer'&&typeof message.file==='string'&&message.file.length<1000)openDocumentTab(message.file,frameVersion);
     }else if(message.type==='iqoko:draft'&&typeof message.key==='string'){
       const prefix=`iqoko-review-draft:${identity.participant.id}:${frameVersion}:`;if(!message.key.startsWith(prefix))return;try{if(message.value===null)sessionStorage.removeItem(message.key);else if(typeof message.value==='string'&&message.value.length<24000)sessionStorage.setItem(message.key,message.value);}catch{storageAvailable=false;event.source.postMessage({type:'iqoko:storage-unavailable'},'*');}
     }
