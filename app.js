@@ -105,7 +105,7 @@
       const bridge=doc.createElement('script');bridge.textContent=bridgeSource;doc.body.append(bridge);
       if(parsed.kind==='report'){const client=doc.createElement('script');client.textContent=clientSource;doc.body.append(client);}
       const style=doc.createElement('style');style.textContent='.topbar,.toolbar{display:none!important}html,body{min-height:0!important}.srv-global{margin-top:18px!important}@media print{html,body{height:auto!important;overflow:visible!important}}';doc.head.append(style);
-      frame=document.createElement('iframe');frame.className='document-frame';frame.title=parsed.kind==='print'?'Сохранённая редакция отчёта':'Совместный отчёт IQOKO и ЕКС';frame.setAttribute('sandbox','allow-scripts allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads');frame.referrerPolicy='no-referrer';
+      frame=document.createElement('iframe');frame.className='document-frame'+(parsed.kind==='report'?' working-frame':'');frame.title=parsed.kind==='print'?'Сохранённая редакция отчёта':'Совместный отчёт IQOKO и ЕКС';frame.setAttribute('sandbox','allow-scripts allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads');frame.referrerPolicy='no-referrer';
       frame.srcdoc='<!doctype html>\n'+doc.documentElement.outerHTML;app.querySelector('.document-progress').replaceWith(frame);
       app.querySelector('[data-action="print"]')?.removeAttribute('disabled');
       if(pendingAnchor){const anchor=pendingAnchor;pendingAnchor='';frame.addEventListener('load',()=>{setTimeout(()=>frame?.contentWindow?.postMessage({type:'iqoko:scroll',anchor},'*'),300);},{once:true});}
@@ -127,7 +127,7 @@
         if(popup&&!popup.closed)popup.location.replace(url.href);
         else{const note=document.createElement('div');note.className='route-notice';note.append('Браузер ограничил открытие новой вкладки. ');const link=document.createElement('a');link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Открыть вложение';note.append(link);app.querySelector('.document-tools').after(note);}
       }catch(error){if(popup&&!popup.closed)popup.close();const note=document.createElement('div');note.className='route-notice';note.setAttribute('role','alert');note.textContent=error.message;app.querySelector('.document-tools')?.after(note);}})();
-    }else if(message.type==='iqoko:height'&&Number.isFinite(message.height))frame.style.height=`${Math.max(300,Math.min(message.height,250000))}px`;
+    }else if(message.type==='iqoko:height'&&Number.isFinite(message.height)&&!frame.classList.contains('working-frame'))frame.style.height=`${Math.max(300,Math.min(message.height,250000))}px`;
     else if(message.type==='iqoko:scroll-position'&&Number.isFinite(message.top))window.scrollTo({top:window.scrollY+frame.getBoundingClientRect().top+message.top-112,behavior:'smooth'});
     else if(message.type==='iqoko:dirty'){dirty=Boolean(message.dirty);const status=app.querySelector('.document-status');if(status)status.textContent=dirty?'Есть несохранённые изменения':'Комментарии сохраняются на сервере';}
     else if(message.type==='iqoko:navigate'){
