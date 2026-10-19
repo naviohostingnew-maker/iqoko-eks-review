@@ -11,6 +11,7 @@
   let storageWarning = false;
   let connectionWarning = "";
   let statusText = null;
+  let saveEpoch = 0;
 
   class RequestError extends Error {
     constructor(message, status, data) { super(message); this.status = status; this.data = data; }
@@ -131,13 +132,13 @@
     if (body === block.savedBody) { block.failed = false; clearDraft(block); setBlockStatus(block, "Сохранено на сервере", "saved"); return; }
     if (body.length > 20000) { block.failed = true; setBlockStatus(block, "Не сохранено: максимум 20 000 знаков", "error"); return; }
     if (!block.intent || block.intent.body !== body || block.intent.expectedRevision !== block.revision) block.intent = { body, expectedRevision: block.revision, requestId: crypto.randomUUID() };
-    const intent = block.intent; block.saving = true; block.failed = false; setBlockStatus(block, "Сохраняется…", "pending");
+    const intent = block.intent; saveEpoch += 1; block.saving = true; block.failed = false; setBlockStatus(block, "Сохраняется…", "pending");
     try {
       const result = await request(`comments/${encodeURIComponent(block.id)}`, { method: "PUT", headers: { "Content-Type": "application/json", "X-CSRF-Token": identity.csrf }, body: JSON.stringify({ ...intent, reportVersion }) });
       const saved = result.comment; block.revision = saved.revision; block.savedBody = saved.body; updateComment(saved, block); block.intent = null; clearRecovery(block);
       if (block.textarea.value === body) { block.textarea.value = saved.body; clearDraft(block); }
       else writeDraft(block);
-      block.saving = false; setBlockStatus(block, block.textarea.value === block.savedBody ? "Сохранено" : "Есть новые изменения…", "saved");
+      block.saving = false; setBlockStatus(block, block.textarea.value === block.savedBody ? "Сохранено на сервере" : "Есть новые изменения…", block.textarea.value === block.savedBody ? "saved" : "pending");
       if (block.textarea.value !== block.savedBody) block.timer = setTimeout(() => void save(block), 500);
     } catch (error) {
       block.saving = false;
@@ -190,14 +191,18 @@
   }
   async function refresh() {
     if (document.hidden || blocks.some((block) => block.saving)) return;
+    const startedAtSaveEpoch = saveEpoch;
     try {
-      const state = await request("state"); connectionWarning = "";
+      const state = await request("state");
+      // A response started before a save may contain an older committed revision.
+      if (saveEpoch !== startedAtSaveEpoch || blocks.some((block) => block.saving)) return;
+      connectionWarning = "";
       if (state.report?.version !== reportVersion) { staleReport = true; blocks.forEach((block) => { if (block.textarea) block.textarea.readOnly = true; if (block.saveButton) block.saveButton.disabled = true; }); updateStatus(); return; }
       allCommentsVisible = identity.participant.role === "owner" && state.commentVisibility === "all"; comments = visibleComments(state.comments);
       blocks.forEach((block) => {
         renderOthers(block); if (!block.textarea || block.conflict || block.recovery) return;
         const current = comments.find((comment) => comment.thesisId === block.id && comment.participantId === identity.participant.id) || null;
-        if ((current?.revision || 0) === block.revision) return;
+        if ((current?.revision || 0) <= block.revision) return;
         if (block.textarea.value !== block.savedBody) showConflict(block, current);
         else adoptServer(block, current);
       });

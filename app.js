@@ -72,6 +72,7 @@
   async function changeAccess(type,id) { const person=state.participants.find(p=>p.id===id); if(!person)return; confirmAction(type==='rotate'?'Создать новую персональную ссылку':'Отозвать доступ',`${person.name}. ${type==='rotate'?'Предыдущая ссылка перестанет действовать. Новая будет показана один раз.':'Участник больше не сможет открыть отчёт. Сохранённые комментарии останутся в документе.'}`,()=>runAction(async()=>{const result=await post(`participants/${encodeURIComponent(id)}/${type}`,{});if(type==='rotate')freshLink={name:person.name,url:personalLink(result.token)};else{freshLink=null;notice=`Доступ отозван: ${person.name}.`;}await refreshState();renderDashboard('participants');})); }
   async function exportData(){await runAction(async()=>{const data=await api('export');const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download=`IQOKO_EKS_${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});}
   async function logout(){await runAction(async()=>{await post('logout',{});saveSession('');clearDrafts();identity=null;state=null;freshLink=null;notice='';errorText='';history.replaceState(null,'',location.pathname);currentRoute='';renderDashboard();});}
+  function hasOwnDrafts(){try{const prefix=`iqoko-review-draft:${identity.participant.id}:`;return Object.keys(sessionStorage).some(key=>key.startsWith(prefix));}catch{storageAvailable=false;return true;}}
   function clearDrafts(){try{for(const key of Object.keys(sessionStorage)){if(key.startsWith('iqoko-review-draft:'))sessionStorage.removeItem(key);}}catch{storageAvailable=false;}}
   app.addEventListener('click',(event)=>{const button=event.target.closest('[data-action]');if(!button)return;const action=button.dataset.action;
     if(action==='dismiss'){errorText='';renderDashboard();}
@@ -79,10 +80,16 @@
     else if(action==='copy-link'){void(async()=>{try{await navigator.clipboard.writeText(freshLink.url);button.textContent='Скопировано';}catch{setMessage('Не удалось скопировать автоматически. Выделите ссылку и скопируйте вручную.');}})();}
     else if(action==='rotate'||action==='revoke')void changeAccess(action,button.dataset.id);
     else if(action==='export')void exportData();
-    else if(action==='logout')void logout();
+    else if(action==='logout'){
+      if(dirty||hasOwnDrafts())confirmAction('Есть несохранённые черновики','Перед выходом откройте отчёт и сохраните комментарии. Если подтвердить выход сейчас, локальные черновики будут удалены. Уже сохранённые на сервере комментарии останутся.',logout);
+      else void logout();
+    }
     else if(action==='snapshot'){if(!(document.getElementById('checked-contents')?.checked&&document.getElementById('checked-snapshot')?.checked))return;void runAction(async()=>{await post('snapshots',{});await refreshState();notice='Редакция зафиксирована. Откройте её для печати и подписания на бумаге.';renderDashboard('snapshots');});}
     else if(action==='print')frame?.contentWindow?.postMessage({type:'iqoko:print'},'*');
-    else if(action==='reload-document')void loadDocument(currentRoute);
+    else if(action==='reload-document'){
+      if(dirty)confirmAction('Есть несохранённые комментарии',storageAvailable?'Дождитесь сохранения. Если обновить материалы сейчас, несохранённый текст останется черновиком в этой вкладке.':'Локальная копия недоступна. Перед обновлением дождитесь сохранения или скопируйте текст.',()=>loadDocument(currentRoute));
+      else void loadDocument(currentRoute);
+    }
     else if(action==='report-anchor')frame?.contentWindow?.postMessage({type:'iqoko:scroll',anchor:button.dataset.anchor},'*');
   });
   function draftsFor(version){const result={};try{const prefix=`iqoko-review-draft:${identity.participant.id}:${version}:`;for(const key of Object.keys(sessionStorage)){if(key.startsWith(prefix))result[key]=sessionStorage.getItem(key);}}catch{storageAvailable=false;}return result;}
@@ -157,7 +164,16 @@
     else if(message.type==='iqoko:navigate'){
       if(message.route==='dashboard')location.hash=identity?.participant.role==='owner'?'snapshots':'dashboard';else if(message.route==='report'){pendingAnchor=typeof message.anchor==='string'?message.anchor.replace(/^#/,''):'';location.hash='report';}else if(message.route==='viewer'&&typeof message.file==='string'&&message.file.length<1000)openDocumentTab(message.file,frameVersion);
     }else if(message.type==='iqoko:draft'&&typeof message.key==='string'){
-      const prefix=`iqoko-review-draft:${identity.participant.id}:${frameVersion}:`;if(!message.key.startsWith(prefix))return;try{if(message.value===null)sessionStorage.removeItem(message.key);else if(typeof message.value==='string'&&message.value.length<24000)sessionStorage.setItem(message.key,message.value);}catch{storageAvailable=false;event.source.postMessage({type:'iqoko:storage-unavailable'},'*');}
+      const prefix=`iqoko-review-draft:${identity.participant.id}:${frameVersion}:`;if(!message.key.startsWith(prefix))return;
+      try{
+        if(message.value===null)sessionStorage.removeItem(message.key);
+        else{
+          if(typeof message.value!=='string'||message.value.length>128000)throw new Error('Invalid draft');
+          const draft=JSON.parse(message.value);
+          if(typeof draft.body!=='string'||draft.body.length>20000||!Number.isInteger(draft.baseRevision)||draft.baseRevision<0)throw new Error('Invalid draft');
+          sessionStorage.setItem(message.key,message.value);
+        }
+      }catch{storageAvailable=false;event.source.postMessage({type:'iqoko:storage-unavailable'},'*');}
     }
   });
   async function applyRoute(next){currentRoute=next;const parsed=parseRoute(next);if(!identity){renderDashboard();return;}if(parsed.kind==='dashboard'){try{await refreshState();}catch(error){errorText=error.message;}renderDashboard(parsed.anchor);}else await loadDocument(next);}
